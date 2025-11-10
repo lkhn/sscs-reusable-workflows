@@ -1,0 +1,3 @@
+--platform ubuntu-slim=docker.io/node:24-trixie
+--platform ubuntu-26.04=docker.io/node:24-trixie
+--artifact-server-path .artifacts
