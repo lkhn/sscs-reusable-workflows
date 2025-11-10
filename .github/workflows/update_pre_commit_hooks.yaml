@@ -1,0 +1,102 @@
+name: Update Pre-commit Hooks
+
+permissions: {}
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check_update:
+    name: Check for updates
+    runs-on: ubuntu-slim
+    outputs:
+      hooks_are_updated: ${{ steps.pre_commit_hooks.outputs.updated }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install prek
+        uses: j178/prek-action@18aed88cb20648fa2b0b4320426164ef33f035ef # v2.0.6
+        with:
+          install-only: true
+
+      - name: Check for hook updates
+        id: pre_commit_hooks
+        run: |
+          set -x
+
+          exit_code='0'
+          prek auto-update --freeze --verbose --exit-code || exit_code=$?
+          if [ "$exit_code" = '1' ]; then
+              printf '%s=%s\n' 'updated' 'true' >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          exit "$exit_code"
+
+      - name: Upload updated prek.toml file
+        if: ${{ steps.pre_commit_hooks.outputs.updated }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: prek_toml
+          path: prek.toml
+          if-no-files-found: error
+
+  run_updated_hooks:
+    name: Run updated hooks
+    permissions:
+      contents: write # git push
+      pull-requests: write # gh pr create
+      issues: write # gh issue create
+    if: ${{ needs.check_update.outputs.hooks_are_updated }}
+    needs:
+      - check_update
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: true # git push
+
+      - name: Download updated prek.toml
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: prek_toml
+
+      - name: Install prek
+        uses: j178/prek-action@18aed88cb20648fa2b0b4320426164ef33f035ef # v2.0.6
+        with:
+          install-only: true
+
+      - name: Run updated hooks
+        id: pre_commit_run
+        continue-on-error: true
+        run: prek run --all-files --show-diff-on-failure --verbose
+
+      - name: Create PR if any hook is updated and runs without any issue
+        if: ${{ steps.pre_commit_run.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff prek.toml
+          git checkout -b ci/pre-commit/update
+          git add prek.toml
+          git commit -m 'chore(pre-commit): update hooks'
+          git push --force origin ci/pre-commit/update
+          gh pr create \
+              --fill-verbose \
+              --body "Created by: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --label 'pre-commit'
+
+      - name: Create issue if any of updated hooks runs any issue
+        if: ${{ steps.pre_commit_run.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+              --title 'pre-commit: Hooks are failing after the update' \
+              --body "Created by: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --label 'pre-commit'
