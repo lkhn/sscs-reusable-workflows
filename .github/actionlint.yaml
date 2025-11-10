@@ -1,0 +1,7 @@
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      # As of v1.7.12, Ubuntu 26.04 LTS is not supported yet.
+      - '^label "ubuntu-26.04" is unknown.+$'
+      # As of v1.7.12, job.workflow_* context properties are not supported yet.
+      - '^property "workflow_(ref|sha|repository|file_path)" is not defined in object type.+$'

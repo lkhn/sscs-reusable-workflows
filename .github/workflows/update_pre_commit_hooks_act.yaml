@@ -1,0 +1,113 @@
+# This workflow is managed by gh actions-lock.
+# act_version: https://github.com/nektos/act/releases/tag/v0.2.89
+name: Update Pre-commit Hooks
+
+permissions: {}
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # At 06:00 UTC on every Monday.
+  workflow_dispatch:
+
+jobs:
+  check_update:
+    name: Check for updates
+    runs-on: ubuntu-slim
+    outputs:
+      hooks_are_updated: ${{ steps.pre_commit_hooks.outputs.updated }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install prek
+        uses: j178/prek-action@e98a699c41eb69ab013a45817a0406469a748f8d # v2.0.5
+        with:
+          install-only: true
+
+      - name: Check for hook updates
+        id: pre_commit_hooks
+        run: |
+          set -x
+
+          exit_code='0'
+          prek auto-update --freeze --verbose --exit-code || exit_code=$?
+          if [ "$exit_code" = '1' ]; then
+              printf '%s=%s\n' 'updated' 'true' >> "$GITHUB_OUTPUT"
+              exit 0
+          fi
+          exit "$exit_code"
+
+      - name: Upload updated prek.toml file
+        if: ${{ steps.pre_commit_hooks.outputs.updated }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: prek_toml
+          path: prek.toml
+          if-no-files-found: error
+
+  run_updated_hooks:
+    name: Run updated hooks
+    permissions:
+      contents: write # git push
+      pull-requests: write # gh pr create
+      issues: write # gh issue create
+    if: ${{ needs.check_update.outputs.hooks_are_updated }}
+    needs:
+      - check_update
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false # Use GitHub CLI as a credential helper (gh auth setup-git).
+
+      - name: Download updated prek.toml
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: prek_toml
+
+      - name: Install prek
+        uses: j178/prek-action@e98a699c41eb69ab013a45817a0406469a748f8d # v2.0.5
+        with:
+          install-only: true
+
+      - name: Run updated hooks
+        id: pre_commit_run
+        continue-on-error: true
+        run: prek run --all-files --show-diff-on-failure --verbose
+
+      # Since docker.io/node:24-trixie does not have it.
+      - name: Install GitHub CLI
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: apt-get update && apt-get install --yes gh
+
+      - name: Create PR if any hook is updated and runs without any issue
+        if: ${{ steps.pre_commit_run.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git diff prek.toml
+          git checkout -b ci/pre-commit/update
+          git add prek.toml
+          git commit -m 'chore(pre-commit): update hooks'
+          gh auth setup-git # See: https://github.com/nektos/act/issues/5962.
+          git push --force origin ci/pre-commit/update
+          gh pr create \
+              --fill-verbose \
+              --body "Created by: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --label 'pre-commit'
+
+      - name: Create issue if any of updated hooks runs any issue
+        if: ${{ steps.pre_commit_run.outcome == 'failure' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+              --title 'pre-commit: Hooks are failing after the update' \
+              --body "Created by: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --label 'pre-commit'
