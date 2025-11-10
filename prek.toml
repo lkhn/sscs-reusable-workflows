@@ -1,0 +1,37 @@
+minimum_prek_version = "0.4.5"
+
+[auto_update]
+cooldown_days = 7
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+]
+
+# Security
+[[repos]]
+repo = "https://github.com/mongodb/kingfisher"
+rev = "61a2ab66a0b99521f4eb3073af7638e44a055978" # frozen: v1.104.0
+hooks = [{ id = "kingfisher-auto" }]
+
+# CI: GitHub Actions Security Practices
+[[repos]]
+repo = "https://github.com/zizmorcore/zizmor-pre-commit"
+# rev = "e3eebf65325ccc992422292cb7a4baee967cf815" # frozen: v1.26.1
+rev = "9257c6050c0261b8c57e712f632dc4a8010109a9" # frozen: v1.25.2
+hooks = [{ id = "zizmor" }]
+
+# CI: GitHub Actions Linter
+[[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "914e7df21a07ef503a81201c76d2b11c789d3fca" # frozen: v1.7.12
+hooks = [
+  {
+    id = "actionlint",
+    additional_dependencies = [
+      "github.com/wasilibs/go-shellcheck/cmd/shellcheck@4e7020840c303923eb1ab846fc446d77be892570", # v0.11.1 No frozen support yet.
+    ],
+  },
+]
