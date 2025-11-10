@@ -1,0 +1,310 @@
+name: Build blobs with keys
+
+on:
+  workflow_call:
+    inputs:
+      git_tag:
+        required: false
+        type: string
+    secrets:
+      sigstore_private_key:
+        description: 'Sigstore private key'
+        required: true
+      sigstore_private_key_password:
+        description: 'Password of Sigstore private key'
+        required: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    outputs:
+      sha256sum_base64: ${{ steps.generate_hashes.outputs.sha256sum_base64 }}
+      zig_tarball_x86_64_linux_master: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: 'v3.0.3'
+
+      - name: Create a blob
+        id: blob
+        run: |
+          zig_mirror=$(curl -fsSL https://ziglang.org/download/community-mirrors.txt | shuf -n 1)
+          zig_version=$(curl -fsSL https://ziglang.org/download/index.json | jq -r '.master.version')
+          zig_tarball_x86_64_linux_master="zig-x86_64-linux-${zig_version}.tar.xz"
+          curl -fsSL "${zig_mirror}/${zig_tarball_x86_64_linux_master}" -o "$zig_tarball_x86_64_linux_master"
+          printf '%s=%s\n' 'zig_tarball_x86_64_linux_master' "$zig_tarball_x86_64_linux_master" >> "$GITHUB_OUTPUT"
+
+      - name: Generate checksum
+        env:
+          ZIG_TARBALL: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+        run: sha256sum "$ZIG_TARBALL" > "${ZIG_TARBALL}.sha256sum"
+
+      - name: Sign a blob with Cosign
+        env:
+          ZIG_TARBALL: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+          SIGSTORE_PRIVATE_KEY: ${{ secrets.sigstore_private_key }}
+          COSIGN_PASSWORD: ${{ secrets.sigstore_private_key_password }}
+        run: |
+          cosign sign-blob \
+              --key env://SIGSTORE_PRIVATE_KEY \
+              --bundle "${ZIG_TARBALL}.sigstore.json" \
+              --yes \
+              "$ZIG_TARBALL"
+
+      - name: Output Sigstore Bundle # DEBUG
+        env:
+          ZIG_TARBALL: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+        run: jq '.' "${ZIG_TARBALL}.sigstore.json"
+
+      - name: Generate SBOM in SPDX JSON
+        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        with:
+          file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+          format: spdx-json@2.3
+          output-file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
+
+      - name: Generate SBOM in CycloneDX JSON
+        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        with:
+          file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+          format: cyclonedx-json@1.6
+          output-file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.cyclonedx.json
+
+      - name: Generate base64 encoded hashes for slsa provenance generator
+        id: generate_hashes
+        env:
+          ZIG_TARBALL: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+        run: |
+          hashes=$(sha256sum \
+              "$ZIG_TARBALL" \
+              "${ZIG_TARBALL}.sha256sum" \
+              "${ZIG_TARBALL}.sigstore.json" \
+              "${ZIG_TARBALL}.spdx.json" \
+              "${ZIG_TARBALL}.cyclonedx.json" \
+              | base64 -w0)
+          printf '%s=%s\n' 'sha256sum_base64' "$hashes" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: build_artifacts
+          if-no-files-found: error
+          path: |
+            ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
+            ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.sha256sum
+            ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.sigstore.json
+            ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
+            ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.cyclonedx.json
+
+  provenance:
+    name: Generate SLSA provenance
+    permissions:
+      id-token: write # Needed for provenance signing and ID.
+      actions: read # Needed for detection of GitHub Actions environment.
+      contents: write ## Needed for uploading provenance file as an asset.
+    needs:
+      - build
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses] https://github.com/slsa-framework/slsa-verifier/issues/12
+    with:
+      base64-subjects: "${{ needs.build.outputs.sha256sum_base64 }}"
+
+  artifact_attestations:
+    name: Generate Artifact attestations
+    permissions:
+      id-token: write # Needed for Artifact attestations.
+      attestations: write # Upload to Artifact attestations.
+    needs:
+      - build
+    runs-on: ubuntu-24.04
+    outputs:
+      artifact_attestation_url: ${{ steps.attest_provenance.outputs.attestation-url }}
+      sbom_attestation_spdx_url: ${{ steps.attest_sbom_spdx.outputs.attestation-url }}
+      attest_sbom_cyclonedx_url: ${{ steps.attest_sbom_cyclonedx.outputs.attestation-url }}
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+
+      - name: Attest Build Provenance
+        id: attest_provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: |
+           build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
+           build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.sha256sum
+           build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.sigstore.json
+           build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
+           build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.cyclonedx.json
+
+      - name: Attest SPDX SBOM
+        id: attest_sbom_spdx
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
+          sbom-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
+
+      - name: Attest CycloneDX SBOM
+        id: attest_sbom_cyclonedx
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        with:
+          subject-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
+          sbom-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.cyclonedx.json
+
+  verify:
+    name: Verify
+    needs:
+      - build
+      - provenance
+      - artifact_attestations
+    runs-on: ubuntu-24.04
+    env:
+      ZIG_TARBALL: ${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
+      SIGSTORE_PUBLIC_KEY: sigstore.pub
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@faadad0cce49287aee09b3a48701e75088a2c6ad # v4.0.0
+        with:
+          cosign-release: 'v3.0.3'
+
+      - name: Verify blob with public key and sigstore bundle
+        run: |
+          cosign verify-blob \
+              --key "$SIGSTORE_PUBLIC_KEY" \
+              --bundle "build_artifacts/${ZIG_TARBALL}.sigstore.json" \
+              "build_artifacts/${ZIG_TARBALL}"
+
+      - name: Install SLSA verifier
+        uses: slsa-framework/slsa-verifier/actions/installer@ea584f4502babc6f60d9bc799dbbb13c1caa9ee6 # v2.7.1
+
+      - name: Verify Provenance
+        run: |
+          slsa-verifier verify-artifact \
+              --provenance-path multiple.intoto.jsonl/multiple.intoto.jsonl \
+              --print-provenance \
+              --source-uri "${GITHUB_SERVER_URL##*/}/${GITHUB_REPOSITORY}" \
+              "build_artifacts/${ZIG_TARBALL}" \
+              "build_artifacts/${ZIG_TARBALL}.sha256sum" \
+              "build_artifacts/${ZIG_TARBALL}.sigstore.json" \
+              "build_artifacts/${ZIG_TARBALL}.spdx.json" \
+              "build_artifacts/${ZIG_TARBALL}.cyclonedx.json"
+
+      - name: Verify provenance attestation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_FORCE_TTY: true
+        run: |
+          gh attestation verify \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-repo LKHN/sscs-reusable-workflows \
+              --format json \
+              "build_artifacts/${ZIG_TARBALL}"
+
+      - name: Verify SPDX SBOM attestation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_FORCE_TTY: true
+        run: |
+          gh attestation verify \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-repo LKHN/sscs-reusable-workflows \
+              --format json \
+              --predicate-type 'https://spdx.dev/Document/v2.3' \
+              "build_artifacts/${ZIG_TARBALL}"
+
+      - name: Verify CycloneDX SBOM attestation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_FORCE_TTY: true
+        run: |
+          gh attestation verify \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-repo LKHN/sscs-reusable-workflows \
+              --format json \
+              --predicate-type 'https://cyclonedx.org/bom' \
+              "build_artifacts/${ZIG_TARBALL}"
+
+  release:
+    name: Release
+    permissions:
+      contents: write # Create GitHub Release.
+    needs:
+      - build
+      - provenance
+      - artifact_attestations
+      - verify
+    runs-on: ubuntu-24.04
+    env:
+      ZIG_TARBALL: ${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+
+      - name: Get transparency log entry of Signing
+        id: tlog_signing
+        run: |
+          tlog_index=$(jq -r '.verificationMaterial.tlogEntries[].logIndex' \
+              "build_artifacts/${ZIG_TARBALL}.sigstore.json")
+          printf '%s=%s\n' 'index' "$tlog_index" >> "$GITHUB_OUTPUT"
+
+      - name: Get transparency log entry of SLSA provenance
+        id: tlog_provenance
+        run: |
+          tlog_index=$(jq -r '.verificationMaterial.tlogEntries[].logIndex' \
+              multiple.intoto.jsonl/multiple.intoto.jsonl)
+          printf '%s=%s\n' 'index' "$tlog_index" >> "$GITHUB_OUTPUT"
+
+      - name: Write release notes with transparency logs
+        env:
+          ARTIFACT_ATTESTATION_URL: ${{ needs.artifact_attestations.outputs.artifact_attestation_url }}
+          SBOM_ATTESTATION_SPDX_URL: ${{ needs.artifact_attestations.outputs.sbom_attestation_spdx_url }}
+          ATTEST_SBOM_CYCLONEDX_URL: ${{ needs.artifact_attestations.outputs.attest_sbom_cyclonedx_url }}
+          TLOG_SIGNING_INDEX: ${{ steps.tlog_signing.outputs.index }}
+          TLOG_PROVENANCE_INDEX: ${{ steps.tlog_provenance.outputs.index }}
+        run: |
+          cat > release_notes.md <<EOF
+          - **Workflow Run:** ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - **Transparency log entries:**
+            - Signing: https://search.sigstore.dev/?logIndex=${TLOG_SIGNING_INDEX}
+            - SLSA provenance: https://search.sigstore.dev/?logIndex=${TLOG_PROVENANCE_INDEX}
+          - **Artifact Attestations:**
+            - Artifact attestation: $ARTIFACT_ATTESTATION_URL
+            - SPDX SBOM attestation: $SBOM_ATTESTATION_SPDX_URL
+            - CycloneDX SBOM attestation: $ATTEST_SBOM_CYCLONEDX_URL
+          EOF
+
+      - name: Release a blob with Sigstore Bundle SBOM and SLSA provenance
+        if: ${{ inputs.git_tag }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_TAG: ${{ inputs.git_tag }}
+        run: |
+          gh release create \
+              "blob_key/$GIT_TAG" \
+              --generate-notes \
+              --notes-file release_notes.md \
+              --title "Release of blobs signed with keys $GIT_TAG" \
+              "build_artifacts/${ZIG_TARBALL}" \
+              "build_artifacts/${ZIG_TARBALL}.sha256sum" \
+              "build_artifacts/${ZIG_TARBALL}.sigstore.json" \
+              "build_artifacts/${ZIG_TARBALL}.spdx.json" \
+              "build_artifacts/${ZIG_TARBALL}.cyclonedx.json" \
+              multiple.intoto.jsonl/multiple.intoto.jsonl
