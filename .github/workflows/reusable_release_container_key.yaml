@@ -161,7 +161,7 @@ jobs:
         run: printf '%s=%s\n' 'tag' "$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Generate SBOM in SPDX JSON
-        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        uses: anchore/sbom-action@deef08a0db64bfad603422135db61477b16cef56 # v0.22.1
         with:
           image: ghcr.io/${{ steps.github_repository.outputs.lc }}/${{ steps.image_ghcr.outputs.tag }}@${{ steps.image_manifest_ghcr.outputs.digest }}
           format: spdx-json@2.3
@@ -169,7 +169,7 @@ jobs:
           output-file: ./zig-key.spdx.json
 
       - name: Generate SBOM in CycloneDX JSON
-        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        uses: anchore/sbom-action@deef08a0db64bfad603422135db61477b16cef56 # v0.22.1
         with:
           image: ghcr.io/${{ steps.github_repository.outputs.lc }}/${{ steps.image_ghcr.outputs.tag }}@${{ steps.image_manifest_ghcr.outputs.digest }}
           format: cyclonedx-json@1.6
