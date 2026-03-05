@@ -254,7 +254,7 @@ jobs:
           subject-digest: ${{ needs.build.outputs.digest }}
 
       - name: Attest SPDX SBOM
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        uses: actions/attest-sbom@07e74fc4e78d1aad915e867f9a094073a9f71527 # v4.0.0
         id: attest_sbom_spdx
         with:
           subject-name: ghcr.io/${{ needs.build.outputs.github_repository_lc }}/${{ needs.build.outputs.image_tag }}
@@ -262,7 +262,7 @@ jobs:
           sbom-path: ./zig-key.spdx.json/zig-key.spdx.json
 
       - name: Attest CycloneDX SBOM
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        uses: actions/attest-sbom@07e74fc4e78d1aad915e867f9a094073a9f71527 # v4.0.0
         id: attest_sbom_cyclonedx
         with:
           subject-name: ghcr.io/${{ needs.build.outputs.github_repository_lc }}/${{ needs.build.outputs.image_tag }}
