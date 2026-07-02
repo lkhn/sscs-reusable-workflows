@@ -136,14 +136,14 @@ jobs:
 
       - name: Attest SPDX SBOM
         id: attest_sbom_spdx
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
           sbom-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
 
       - name: Attest CycloneDX SBOM
         id: attest_sbom_cyclonedx
-        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3.0.0
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}
           sbom-path: build_artifacts/${{ needs.build.outputs.zig_tarball_x86_64_linux_master }}.cyclonedx.json
