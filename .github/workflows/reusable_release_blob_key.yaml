@@ -66,14 +66,14 @@ jobs:
         run: jq '.' "${ZIG_TARBALL}.sigstore.json"
 
       - name: Generate SBOM in SPDX JSON
-        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
           format: spdx-json@2.3
           output-file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}.spdx.json
 
       - name: Generate SBOM in CycloneDX JSON
-        uses: anchore/sbom-action@43a17d6e7add2b5535efe4dcae9952337c479a93 # v0.20.11
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
         with:
           file: ${{ steps.blob.outputs.zig_tarball_x86_64_linux_master }}
           format: cyclonedx-json@1.6
