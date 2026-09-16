@@ -15,13 +15,13 @@ hooks = [
 
 [[repos]]
 repo = "https://github.com/mongodb/kingfisher"
-rev = "61a2ab66a0b99521f4eb3073af7638e44a055978" # frozen: v1.104.0
+rev = "5f6fd97c7f92dd004e9b9f2df12afafa5166834d" # frozen: v2.2.0
 hooks = [{ id = "kingfisher-auto" }]
 
 [[repos]]
 repo = "https://github.com/zizmorcore/zizmor-pre-commit"
 # rev = "e3eebf65325ccc992422292cb7a4baee967cf815" # frozen: v1.26.1
-rev = "9257c6050c0261b8c57e712f632dc4a8010109a9" # frozen: v1.25.2
+rev = "fa412071e4f5d44d44f9e365f4676f9df92456a2" # frozen: v1.30.1
 hooks = [{ id = "zizmor" }]
 
 [[repos]]
